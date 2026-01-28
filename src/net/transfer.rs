@@ -383,11 +383,18 @@ impl TransferManager {
     /// Sends files to the connected peer.
     #[instrument(skip(self, paths), fields(file_count = paths.len()))]
     pub async fn send_files(&self, paths: Vec<PathBuf>) -> Result<Vec<TransferHandle>> {
-        let peer_addr = self.connected_peer().ok_or(TransferError::NoPeer)?;
+        info!(file_count = paths.len(), "send_files called");
+        let peer_addr = self.connected_peer().ok_or_else(|| {
+            error!("No peer connected when trying to send files");
+            TransferError::NoPeer
+        })?;
+        let addrs: Vec<_> = peer_addr.direct_addresses().collect();
+        info!(peer = %peer_addr.node_id, addresses = ?addrs, "Sending to peer");
 
         let mut handles = Vec::new();
 
         for path in paths {
+            info!(path = %path.display(), "Sending file");
             let handle = self.send_file_to_peer(&peer_addr, &path).await?;
             handles.push(handle);
         }
@@ -451,7 +458,11 @@ impl TransferManager {
         let peer_addr_clone = peer_addr.clone();
         let cancelled_clone = cancelled.clone();
 
+        info!(transfer_id = %transfer_id, "Spawning send task");
+
+        let task_transfer_id = transfer_id;
         tokio::spawn(async move {
+            info!(transfer_id = %task_transfer_id, "Send task started");
             let mut progress = TransferProgress {
                 transfer_id,
                 direction: TransferDirection::Send,
@@ -466,9 +477,16 @@ impl TransferManager {
 
             let _ = progress_tx.send(progress.clone()).await;
 
+            info!(
+                transfer_id = %transfer_id,
+                peer = %peer_addr_clone.node_id,
+                "Connecting to peer to send file ticket"
+            );
+
             // Connect to peer and send the ticket
             match endpoint.connect(peer_addr_clone.clone()).await {
                 Ok(conn) => {
+                    info!(transfer_id = %transfer_id, "Connected to peer, opening bi stream");
                     // Open a bidirectional stream to send the ticket
                     match conn.open_bi().await {
                         Ok((mut send, mut recv)) => {
@@ -476,12 +494,15 @@ impl TransferManager {
                             let ticket_str = ticket.to_string();
                             let msg = format!("FILE:{}\n{}", file_name, ticket_str);
 
+                            info!(transfer_id = %transfer_id, msg_len = msg.len(), "Sending file ticket to peer");
+
                             if let Err(e) = send.write_all(msg.as_bytes()).await {
-                                warn!("Failed to send ticket: {}", e);
+                                error!(transfer_id = %transfer_id, error = %e, "Failed to send ticket");
                                 progress.state = TransferState::Failed {
                                     reason: format!("Failed to send ticket: {}", e),
                                 };
                             } else {
+                                info!(transfer_id = %transfer_id, "Ticket sent, finishing stream and waiting for ACK");
                                 let _ = send.finish();
                                 // Wait for acknowledgment
                                 let mut buf = [0u8; 3];
@@ -490,17 +511,25 @@ impl TransferManager {
                                         // Transfer complete - peer will fetch the blob
                                         progress.transferred_bytes = metadata.len();
                                         progress.state = TransferState::Completed;
-                                        info!(transfer_id = %transfer_id, "File transfer completed");
+                                        info!(transfer_id = %transfer_id, "File transfer completed - ACK received");
                                     }
-                                    _ => {
+                                    Ok(_) => {
+                                        error!(transfer_id = %transfer_id, received = ?buf, "Unexpected response from peer");
                                         progress.state = TransferState::Failed {
-                                            reason: "No acknowledgment from peer".to_string(),
+                                            reason: "Unexpected response from peer".to_string(),
+                                        };
+                                    }
+                                    Err(e) => {
+                                        error!(transfer_id = %transfer_id, error = %e, "Failed to read ACK from peer");
+                                        progress.state = TransferState::Failed {
+                                            reason: format!("No acknowledgment from peer: {}", e),
                                         };
                                     }
                                 }
                             }
                         }
                         Err(e) => {
+                            error!(transfer_id = %transfer_id, error = %e, "Failed to open bi stream");
                             progress.state = TransferState::Failed {
                                 reason: format!("Failed to open stream: {}", e),
                             };
@@ -508,6 +537,7 @@ impl TransferManager {
                     }
                 }
                 Err(e) => {
+                    error!(transfer_id = %transfer_id, error = %e, "Failed to connect to peer");
                     progress.state = TransferState::Failed {
                         reason: format!("Failed to connect to peer: {}", e),
                     };

@@ -180,21 +180,41 @@ impl Discovery {
                                             let device_name =
                                                 info.get_property_val_str("name").map(String::from);
 
-                                            let peer = DiscoveredPeer {
-                                                device_id,
-                                                addresses,
-                                                device_name,
-                                                last_seen: std::time::Instant::now(),
-                                                iroh_port: info.get_port(),
+                                            // Merge addresses with existing peer if present
+                                            let mut peers_guard = peers.write();
+                                            let peer = if let Some(existing) =
+                                                peers_guard.get_mut(&device_id)
+                                            {
+                                                // Merge addresses, avoiding duplicates
+                                                for addr in addresses {
+                                                    if !existing.addresses.contains(&addr) {
+                                                        existing.addresses.push(addr);
+                                                    }
+                                                }
+                                                existing.last_seen = std::time::Instant::now();
+                                                if device_name.is_some() {
+                                                    existing.device_name = device_name;
+                                                }
+                                                existing.clone()
+                                            } else {
+                                                let peer = DiscoveredPeer {
+                                                    device_id,
+                                                    addresses,
+                                                    device_name,
+                                                    last_seen: std::time::Instant::now(),
+                                                    iroh_port: info.get_port(),
+                                                };
+                                                peers_guard.insert(device_id, peer.clone());
+                                                peer
                                             };
+                                            drop(peers_guard);
 
-                                            info!(
+                                            debug!(
                                                 peer_id = %device_id,
-                                                addresses = ?peer.addresses,
-                                                "Discovered peer via mDNS"
+                                                address_count = peer.addresses.len(),
+                                                "Updated peer addresses via mDNS"
                                             );
 
-                                            peers.write().insert(device_id, peer.clone());
                                             let _ = peer_tx.try_send(peer);
                                         }
                                         Err(e) => {
