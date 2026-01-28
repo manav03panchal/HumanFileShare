@@ -117,6 +117,7 @@ impl Endpoint {
         let endpoint = IrohEndpoint::builder()
             .secret_key(secret_key.clone())
             .alpns(vec![ALPN.to_vec()])
+            .discovery_local_network()
             .bind()
             .await
             .context("failed to bind Iroh endpoint")?;

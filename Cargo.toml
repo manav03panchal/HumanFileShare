@@ -33,12 +33,8 @@ tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
 
 # P2P networking with iroh
-iroh = "0.35"
+iroh = { version = "0.35", features = ["discovery-local-network"] }
 iroh-blobs = "0.35"
-
-# Local network discovery
-mdns-sd = "0.12"
-flume = "0.11"
 
 # Utilities
 dirs = "5.0"
