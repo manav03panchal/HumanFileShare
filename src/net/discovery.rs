@@ -132,7 +132,8 @@ impl Discovery {
             self.iroh_port,
             properties,
         )
-        .map_err(|e| DiscoveryError::RegistrationFailed(e.to_string()))?;
+        .map_err(|e| DiscoveryError::RegistrationFailed(e.to_string()))?
+        .enable_addr_auto();
 
         mdns.register(service_info)
             .map_err(|e| DiscoveryError::RegistrationFailed(e.to_string()))?;
@@ -144,13 +145,17 @@ impl Discovery {
             .browse(SERVICE_TYPE)
             .map_err(|e| DiscoveryError::InitFailed(e.to_string()))?;
 
+        // Set running flag BEFORE spawning the task
+        *self.running.write() = true;
+
         // Spawn task to handle discovery events
         let peers = self.peers.clone();
         let peer_tx = self.peer_tx.clone();
         let running = self.running.clone();
         let our_device_id = self.device_id;
 
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
+            debug!("mDNS browse task started");
             while *running.read() {
                 match receiver.recv_timeout(Duration::from_millis(100)) {
                     Ok(event) => {
@@ -200,9 +205,16 @@ impl Discovery {
                             }
                             ServiceEvent::ServiceRemoved(_, fullname) => {
                                 debug!(service = %fullname, "Service removed");
-                                // Could remove from peers map if we tracked by fullname
                             }
-                            _ => {}
+                            ServiceEvent::SearchStarted(service_type) => {
+                                debug!(service_type = %service_type, "mDNS search started");
+                            }
+                            ServiceEvent::ServiceFound(service_type, fullname) => {
+                                debug!(service_type = %service_type, fullname = %fullname, "Service found, resolving...");
+                            }
+                            _ => {
+                                debug!("Other mDNS event received");
+                            }
                         }
                     }
                     Err(RecvTimeoutError::Timeout) => {
@@ -224,7 +236,6 @@ impl Discovery {
         });
 
         self.mdns = Some(mdns);
-        *self.running.write() = true;
 
         info!("mDNS discovery started");
         Ok(())
