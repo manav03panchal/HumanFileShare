@@ -11,7 +11,8 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use iroh::NodeAddr;
 use iroh::PublicKey;
-use iroh::protocol::Router;
+use iroh::endpoint::Connection;
+use iroh::protocol::{ProtocolHandler, Router};
 use iroh_blobs::downloader::DownloadRequest;
 use iroh_blobs::net_protocol::Blobs;
 use iroh_blobs::store::mem::Store as MemStore;
@@ -22,9 +23,9 @@ use iroh_blobs::{BlobFormat, HashAndFormat};
 use parking_lot::RwLock;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
-use super::endpoint::Endpoint;
+use super::endpoint::{ALPN, Endpoint};
 
 /// Errors that can occur during file transfers
 #[derive(Error, Debug)]
@@ -141,6 +142,113 @@ impl TransferHandle {
     }
 }
 
+/// Callback type for received files
+pub type OnFileReceived = Arc<dyn Fn(String, PathBuf, u64) + Send + Sync + 'static>;
+
+/// Protocol handler for file transfer metadata
+#[derive(Clone)]
+struct FileTransferHandler {
+    blobs: Blobs<MemStore>,
+    download_dir: PathBuf,
+    on_file_received: Arc<RwLock<Option<OnFileReceived>>>,
+}
+
+impl std::fmt::Debug for FileTransferHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileTransferHandler")
+            .field("download_dir", &self.download_dir)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProtocolHandler for FileTransferHandler {
+    fn accept(
+        &self,
+        connection: Connection,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'static>>
+    {
+        let blobs = self.blobs.clone();
+        let download_dir = self.download_dir.clone();
+        let on_file_received = self.on_file_received.clone();
+
+        Box::pin(async move {
+            let peer_id = connection.remote_node_id().ok();
+            debug!(peer = ?peer_id, "Handling incoming file transfer connection");
+
+            // Accept incoming bi-directional stream
+            let (mut send, mut recv) = connection.accept_bi().await?;
+
+            // Read the message (FILE:filename\nticket)
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                match recv.read(&mut chunk).await? {
+                    Some(n) => buf.extend_from_slice(&chunk[..n]),
+                    None => break,
+                }
+                if buf.len() > 10000 {
+                    break;
+                }
+            }
+
+            let msg = String::from_utf8_lossy(&buf);
+            if let Some(rest) = msg.strip_prefix("FILE:") {
+                if let Some((file_name, ticket_str)) = rest.split_once('\n') {
+                    let ticket: BlobTicket = ticket_str
+                        .trim()
+                        .parse()
+                        .context("failed to parse blob ticket")?;
+
+                    info!(file_name = %file_name, hash = %ticket.hash(), "Receiving file via protocol handler");
+
+                    let dest_path = download_dir.join(file_name);
+
+                    // Download the blob
+                    let downloader = blobs.downloader();
+                    let hash_and_format = HashAndFormat::raw(ticket.hash());
+                    let request =
+                        DownloadRequest::new(hash_and_format, [ticket.node_addr().clone()]);
+                    let handle = downloader.queue(request).await;
+                    handle.await.context("failed to download blob")?;
+
+                    // Export to file
+                    let export_progress: Box<dyn Fn(u64) -> std::io::Result<()> + Send + Sync> =
+                        Box::new(|_| Ok(()));
+                    blobs
+                        .store()
+                        .export(
+                            ticket.hash(),
+                            dest_path.clone(),
+                            ExportMode::Copy,
+                            export_progress,
+                        )
+                        .await
+                        .context("failed to export blob to file")?;
+
+                    // Get file size
+                    let size = tokio::fs::metadata(&dest_path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+
+                    info!(file_name = %file_name, size = size, dest = %dest_path.display(), "File received successfully");
+
+                    // Send acknowledgment
+                    send.write_all(b"ACK").await?;
+                    let _ = send.finish();
+
+                    // Notify callback
+                    if let Some(callback) = on_file_received.read().as_ref() {
+                        callback(file_name.to_string(), dest_path, size);
+                    }
+                }
+            }
+
+            Ok(())
+        })
+    }
+}
+
 /// Manages file transfers using iroh-blobs
 pub struct TransferManager {
     /// Reference to the network endpoint
@@ -155,6 +263,8 @@ pub struct TransferManager {
     download_dir: PathBuf,
     /// Currently connected peer
     connected_peer: Arc<RwLock<Option<NodeAddr>>>,
+    /// Handler for setting callback
+    file_handler: FileTransferHandler,
 }
 
 /// Internal transfer tracking info
@@ -183,9 +293,17 @@ impl TransferManager {
         // Create an in-memory blob store with the blobs protocol
         let blobs = Blobs::memory().build(&iroh_endpoint);
 
-        // Build a router that accepts blob requests
+        // Create our custom file transfer handler
+        let file_handler = FileTransferHandler {
+            blobs: blobs.clone(),
+            download_dir: download_dir.clone(),
+            on_file_received: Arc::new(RwLock::new(None)),
+        };
+
+        // Build a router that accepts both blob requests and our file transfer protocol
         let router = Router::builder(iroh_endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
+            .accept(ALPN.to_vec(), file_handler.clone())
             .spawn();
 
         info!(download_dir = %download_dir.display(), "Transfer manager initialized");
@@ -197,6 +315,7 @@ impl TransferManager {
             transfers: Arc::new(RwLock::new(HashMap::new())),
             download_dir,
             connected_peer: Arc::new(RwLock::new(None)),
+            file_handler,
         })
     }
 
@@ -218,6 +337,11 @@ impl TransferManager {
     /// Gets the download directory.
     pub fn download_dir(&self) -> &Path {
         &self.download_dir
+    }
+
+    /// Sets the callback to be invoked when a file is received.
+    pub fn set_on_file_received(&self, callback: OnFileReceived) {
+        *self.file_handler.on_file_received.write() = Some(callback);
     }
 
     /// Creates a blob ticket for a file that can be shared with a peer.
@@ -462,91 +586,22 @@ impl TransferManager {
         Ok(dest_path)
     }
 
-    /// Receives incoming file transfers (runs as a background task).
+    /// Sets up the file receive callback and keeps the transfer manager alive.
+    /// The Router handles incoming connections automatically.
     pub async fn receive_loop(
         self: Arc<Self>,
         on_file_received: Arc<dyn Fn(String, PathBuf, u64) + Send + Sync + 'static>,
     ) {
-        info!("Starting file receive loop");
+        info!("Starting file receive loop (Router handles connections)");
 
+        // Set the callback that will be invoked by the FileTransferHandler
+        self.set_on_file_received(on_file_received);
+
+        // Keep this task alive - the Router handles incoming connections
+        // This loop just keeps the transfer manager from being dropped
         loop {
-            match self.endpoint.accept().await {
-                Ok(Some(conn)) => {
-                    let peer_id = conn.remote_node_id().ok();
-                    debug!(peer = ?peer_id, "Accepted incoming connection");
-
-                    // Handle incoming stream
-                    let self_clone = self.clone();
-                    let callback = on_file_received.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = self_clone.handle_incoming_connection(conn, callback).await
-                        {
-                            warn!("Error handling incoming connection: {}", e);
-                        }
-                    });
-                }
-                Ok(None) => {
-                    // Endpoint shut down
-                    break;
-                }
-                Err(e) => {
-                    warn!("Error accepting connection: {}", e);
-                }
-            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
         }
-    }
-
-    async fn handle_incoming_connection(
-        &self,
-        conn: iroh::endpoint::Connection,
-        on_file_received: Arc<dyn Fn(String, PathBuf, u64) + Send + Sync>,
-    ) -> Result<()> {
-        // Accept incoming bi-directional stream
-        let (mut send, mut recv) = conn.accept_bi().await?;
-
-        // Read the message (FILE:filename\nticket)
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 1024];
-        loop {
-            match recv.read(&mut chunk).await? {
-                Some(n) => buf.extend_from_slice(&chunk[..n]),
-                None => break,
-            }
-            if buf.len() > 10000 {
-                // Safety limit
-                break;
-            }
-        }
-
-        let msg = String::from_utf8_lossy(&buf);
-        if let Some(rest) = msg.strip_prefix("FILE:") {
-            if let Some((file_name, ticket_str)) = rest.split_once('\n') {
-                let ticket: BlobTicket = ticket_str
-                    .trim()
-                    .parse()
-                    .context("failed to parse blob ticket")?;
-
-                info!(file_name = %file_name, "Receiving file");
-
-                // Download the file
-                let dest_path = self.download_from_ticket(&ticket, file_name).await?;
-
-                // Get file size
-                let size = tokio::fs::metadata(&dest_path)
-                    .await
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-
-                // Send acknowledgment
-                send.write_all(b"ACK").await?;
-                let _ = send.finish();
-
-                // Notify callback
-                on_file_received(file_name.to_string(), dest_path, size);
-            }
-        }
-
-        Ok(())
     }
 
     /// Returns all active transfers
