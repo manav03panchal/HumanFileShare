@@ -2,6 +2,17 @@
 //!
 //! A minimalist application that makes sharing files between devices
 //! as simple as possible.
+//!
+//! ## Testing with multiple instances on one machine
+//!
+//! Run two instances with different config directories:
+//! ```bash
+//! # Terminal 1
+//! HFS_CONFIG_DIR=/tmp/hfs1 cargo run
+//!
+//! # Terminal 2
+//! HFS_CONFIG_DIR=/tmp/hfs2 cargo run
+//! ```
 
 use std::sync::Arc;
 use std::thread;

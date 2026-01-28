@@ -286,8 +286,16 @@ impl Endpoint {
         }
     }
 
-    /// Gets the path to the configuration directory
+    /// Gets the path to the configuration directory.
+    ///
+    /// Respects the `HFS_CONFIG_DIR` environment variable for testing
+    /// multiple instances on the same machine.
     fn config_dir() -> Result<PathBuf> {
+        // Check for custom config dir (useful for testing multiple instances)
+        if let Ok(custom_dir) = std::env::var("HFS_CONFIG_DIR") {
+            return Ok(PathBuf::from(custom_dir));
+        }
+
         dirs::config_dir()
             .map(|p| p.join(CONFIG_DIR))
             .ok_or_else(|| {
