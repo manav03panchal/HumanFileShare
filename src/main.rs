@@ -19,7 +19,6 @@ use std::thread;
 
 use anyhow::Result;
 use gpui::*;
-use parking_lot::RwLock;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -88,12 +87,10 @@ fn main() -> Result<()> {
 async fn run_networking(app_state: AppState) -> Result<()> {
     info!("Initializing networking...");
 
-    // Create the endpoint
+    // Create the endpoint (with built-in mDNS discovery via discovery_local_network())
     let endpoint = Arc::new(Endpoint::new().await?);
     let device_id = endpoint.device_id();
-    let bound_port = endpoint.bound_port().unwrap_or(0);
     info!("Device ID: {}", device_id);
-    info!("Bound port: {}", bound_port);
 
     // Create the transfer manager
     let transfer_manager = Arc::new(TransferManager::new(endpoint.clone()).await?);
@@ -103,33 +100,30 @@ async fn run_networking(app_state: AppState) -> Result<()> {
     app_state.set_endpoint(endpoint.clone());
     app_state.set_transfer_manager(transfer_manager.clone());
 
-    // Start mDNS discovery
-    let discovery = Arc::new(RwLock::new(Discovery::new(device_id, bound_port)));
-    if let Err(e) = discovery.write().start() {
-        warn!("Failed to start mDNS discovery: {}", e);
-    } else {
-        info!("mDNS discovery started");
-    }
+    // Create discovery wrapper around the endpoint
+    // Note: mDNS is already running via Iroh's discovery_local_network()
+    let iroh_endpoint = endpoint.iroh_endpoint()?;
+    let discovery = Arc::new(Discovery::new(iroh_endpoint));
+    info!("Discovery initialized (using Iroh's built-in mDNS)");
 
     info!("Networking initialized successfully");
 
     // Main networking loop
     let app_state_clone = app_state.clone();
     let transfer_manager_clone = transfer_manager.clone();
-    let discovery_clone = discovery.clone();
 
     // Task to handle discovered peers
     let peer_task = tokio::spawn(async move {
         loop {
-            // Check for discovered peers
-            let peers = discovery_clone.read().known_peers();
+            // Check for discovered peers via Iroh's built-in discovery
+            let peers = discovery.known_peers();
             if !peers.is_empty() {
                 // Auto-connect to the first discovered peer if not already connected
                 if app_state_clone.connected_peer().is_none() {
                     let peer = &peers[0];
                     info!(
                         peer_id = %peer.device_id,
-                        name = ?peer.device_name,
+                        addresses = ?peer.addresses,
                         "Auto-connecting to discovered peer"
                     );
 
