@@ -33,7 +33,7 @@ pub mod endpoint;
 pub mod pairing;
 pub mod transfer;
 
-pub use discovery::Discovery;
+pub use discovery::{DiscoveredPeer, Discovery};
 pub use endpoint::Endpoint;
 pub use pairing::{PairingCode, PairingSession};
 pub use transfer::{

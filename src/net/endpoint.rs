@@ -152,12 +152,16 @@ impl Endpoint {
     /// The node address contains the public key and network addresses
     /// needed for other peers to connect to this device.
     pub async fn node_addr(&self) -> Result<NodeAddr> {
-        let state = self.state.read();
-        match &*state {
-            EndpointState::Running(endpoint) => Ok(endpoint.node_addr().await?),
-            EndpointState::Uninitialized => Err(EndpointError::NotInitialized.into()),
-            EndpointState::Shutdown => Err(EndpointError::Shutdown.into()),
-        }
+        // Clone the endpoint inside the lock, then drop the lock before awaiting
+        let endpoint = {
+            let state = self.state.read();
+            match &*state {
+                EndpointState::Running(endpoint) => endpoint.clone(),
+                EndpointState::Uninitialized => return Err(EndpointError::NotInitialized.into()),
+                EndpointState::Shutdown => return Err(EndpointError::Shutdown.into()),
+            }
+        };
+        Ok(endpoint.node_addr().await?)
     }
 
     /// Connects to a remote peer by their node address
@@ -262,6 +266,21 @@ impl Endpoint {
         let state = self.state.read();
         match &*state {
             EndpointState::Running(endpoint) => Ok(endpoint.clone()),
+            EndpointState::Uninitialized => Err(EndpointError::NotInitialized.into()),
+            EndpointState::Shutdown => Err(EndpointError::Shutdown.into()),
+        }
+    }
+
+    /// Returns the local port the endpoint is bound to.
+    ///
+    /// This is useful for mDNS advertisement.
+    pub fn bound_port(&self) -> Result<u16> {
+        let state = self.state.read();
+        match &*state {
+            EndpointState::Running(endpoint) => {
+                let (ipv4_addr, _ipv6_addr) = endpoint.bound_sockets();
+                Ok(ipv4_addr.port())
+            }
             EndpointState::Uninitialized => Err(EndpointError::NotInitialized.into()),
             EndpointState::Shutdown => Err(EndpointError::Shutdown.into()),
         }

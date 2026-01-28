@@ -38,10 +38,12 @@ iroh-blobs = "0.35"
 
 # Local network discovery
 mdns-sd = "0.12"
+flume = "0.11"
 
 # Utilities
 dirs = "5.0"
 rand = "0.8"
+hostname = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = "21.0"
