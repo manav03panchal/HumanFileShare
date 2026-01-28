@@ -1,12 +1,33 @@
 //! The Received Files component - displays received files on the right side.
 
 use gpui::*;
+use std::path::PathBuf;
 
 use crate::app::AppState;
 use crate::ui::Theme;
 
 /// Window size (square).
 const WINDOW_SIZE: f32 = 320.0;
+
+/// Data for a draggable file item.
+#[derive(Clone)]
+struct DraggedFile {
+    path: PathBuf,
+    name: String,
+}
+
+impl Render for DraggedFile {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .bg(rgba(0x00000088))
+            .rounded_md()
+            .text_sm()
+            .text_color(white())
+            .child(self.name.clone())
+    }
+}
 
 /// A GPUI view for displaying received files.
 pub struct ReceivedFilesView;
@@ -25,50 +46,83 @@ impl Render for ReceivedFilesView {
 
         let half_width = WINDOW_SIZE / 2.0;
 
-        div()
-            .id("received-container")
-            .absolute()
-            .right(px(0.0))
-            .top(px(0.0))
-            .w(px(half_width))
-            .h(px(WINDOW_SIZE))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .children(received_files.iter().enumerate().map(|(idx, file)| {
-                let file_name = file.name.clone();
-                let file_size = format_size(file.size);
+        if received_files.is_empty() {
+            // Empty state
+            div()
+                .id("received-container")
+                .absolute()
+                .right(px(0.0))
+                .top(px(0.0))
+                .w(px(half_width))
+                .h(px(WINDOW_SIZE))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.foreground.opacity(0.3))
+                        .child("Received files appear here"),
+                )
+        } else {
+            div()
+                .id("received-container")
+                .absolute()
+                .right(px(0.0))
+                .top(px(0.0))
+                .w(px(half_width))
+                .h(px(WINDOW_SIZE))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .p_3()
+                .children(received_files.iter().enumerate().map(|(idx, file)| {
+                    let file_name = file.name.clone();
+                    let file_size = format_size(file.size);
+                    let file_path = file.path.clone();
 
-                div()
-                    .id(ElementId::Integer(idx as u64))
-                    .px_3()
-                    .py_2()
-                    .bg(theme.foreground.opacity(0.1))
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.foreground.opacity(0.2)))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground)
-                                    .child(truncate_filename(&file_name, 20)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.foreground.opacity(0.6))
-                                    .child(file_size),
-                            ),
-                    )
-            }))
+                    div()
+                        .id(ElementId::Integer(idx as u64))
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .bg(theme.foreground.opacity(0.08))
+                        .rounded_md()
+                        .cursor_grab()
+                        .hover(|style| style.bg(theme.foreground.opacity(0.15)))
+                        .on_drag(
+                            DraggedFile {
+                                path: file_path,
+                                name: file_name.clone(),
+                            },
+                            |drag, _, _, cx| cx.new(|_| drag.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_px()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(truncate_filename(&file_name, 18)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.foreground.opacity(0.5))
+                                        .child(file_size),
+                                ),
+                        )
+                }))
+        }
     }
 }
 

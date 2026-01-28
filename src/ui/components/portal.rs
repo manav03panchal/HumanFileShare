@@ -45,6 +45,7 @@ impl Render for PortalView {
         let theme = cx.global::<Theme>();
         let app_state = cx.global::<AppState>();
         let portal_state = app_state.portal_state();
+        let connected_peer = app_state.connected_peer();
 
         // Left half of window, containing a circle positioned so only right half shows
         let circle_size = WINDOW_SIZE;
@@ -54,8 +55,31 @@ impl Render for PortalView {
         let bg_color = match (self.drag_hovering, portal_state) {
             (true, _) => theme.foreground.opacity(0.7), // Lighter when hovering
             (_, PortalState::Transferring) => theme.foreground.opacity(0.5), // Dimmed during transfer
-            (_, PortalState::Connected) => theme.foreground.opacity(0.9), // Slightly lighter when connected
-            _ => theme.foreground,
+            (_, PortalState::Connected) => theme.foreground, // Full color when connected
+            (_, PortalState::Searching) => theme.foreground.opacity(0.8), // Slightly dimmed when searching
+            _ => theme.foreground.opacity(0.6), // Dimmed when idle/not connected
+        };
+
+        // Status text at bottom
+        let status_text = match portal_state {
+            PortalState::Idle => {
+                if connected_peer.is_some() {
+                    "Ready".to_string()
+                } else {
+                    "Searching...".to_string()
+                }
+            }
+            PortalState::Searching => "Searching...".to_string(),
+            PortalState::Connected => {
+                if let Some(peer) = &connected_peer {
+                    peer.name
+                        .clone()
+                        .unwrap_or_else(|| format!("{}...", &peer.id.to_string()[..8]))
+                } else {
+                    "Connected".to_string()
+                }
+            }
+            PortalState::Transferring => "Sending...".to_string(),
         };
 
         div()
@@ -88,6 +112,17 @@ impl Render for PortalView {
                     .rounded_full()
                     .bg(bg_color)
                     .cursor_pointer(),
+            )
+            .child(
+                // Status indicator at bottom left
+                div()
+                    .absolute()
+                    .bottom(px(12.0))
+                    .left(px(12.0))
+                    .text_xs()
+                    .text_color(theme.background)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(status_text),
             )
     }
 }
