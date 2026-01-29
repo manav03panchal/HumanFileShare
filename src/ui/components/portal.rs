@@ -31,6 +31,31 @@ use tracing::info;
 use crate::app::{AppState, PortalState};
 use crate::ui::Theme;
 
+/// Open file picker and queue selected files for sending
+fn open_file_picker(cx: &mut App) {
+    let options = PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: true,
+        prompt: None,
+    };
+
+    let receiver = cx.prompt_for_paths(options);
+
+    cx.spawn(async move |cx| {
+        if let Ok(Ok(Some(paths))) = receiver.await {
+            if !paths.is_empty() {
+                info!("Files selected via picker: {:?}", paths);
+                cx.update(|cx| {
+                    let app_state = cx.global::<AppState>();
+                    app_state.queue_files_for_send(paths);
+                }).ok();
+            }
+        }
+    })
+    .detach();
+}
+
 /// A GPUI view for the Portal - left semicircle drop zone.
 pub struct PortalView {
     /// Whether a drag is currently hovering over the portal
@@ -135,7 +160,10 @@ impl Render for PortalView {
                     .h(circle_size)
                     .rounded_full()
                     .bg(bg_color)
-                    .cursor_pointer(),
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                        open_file_picker(cx);
+                    }),
             )
             .child(
                 // Status indicator at bottom left
