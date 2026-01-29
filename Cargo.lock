@@ -837,6 +837,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsh"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
+dependencies = [
+ "cfg_aliases",
+]
+
+[[package]]
 name = "bounded-integer"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1571,6 +1580,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -2820,6 +2843,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-component-assets"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5842ea3f1e596fbc611894dcc0266df7125bc226f603ca313f5460b700503564"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "rust-embed",
+]
+
+[[package]]
 name = "gpui-component-macros"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3287,11 +3321,14 @@ name = "humanfileshare"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "core-text",
+ "dashmap",
  "dirs 5.0.1",
  "futures",
  "gpui",
  "gpui-component",
+ "gpui-component-assets",
  "hostname",
  "iroh",
  "iroh-blobs",
@@ -3300,8 +3337,11 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "smallvec",
+ "smol_str 0.3.5",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -6543,6 +6583,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rust-embed-utils",
+ "shellexpand",
  "syn 2.0.111",
  "walkdir",
 ]
@@ -7120,6 +7161,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shellexpand"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b1fdf65dd6331831494dd616b30351c38e96e45921a27745cf98490458b90bb"
+dependencies = [
+ "dirs 5.0.1",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7251,6 +7301,16 @@ name = "smol_str"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
+
+[[package]]
+name = "smol_str"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f7a918bd2a9951d18ee6e48f076843e8e73a9a5d22cf05bcd4b7a81bdd04e17"
+dependencies = [
+ "borsh",
+ "serde_core",
+]
 
 [[package]]
 name = "snafu"
