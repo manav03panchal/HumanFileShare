@@ -35,6 +35,7 @@ pub mod transfer;
 
 pub use discovery::DiscoveredPeer;
 pub use discovery::Discovery;
+pub use discovery::PeerEvent;
 pub use endpoint::Endpoint;
 pub use pairing::{PairingCode, PairingSession};
 pub use transfer::{

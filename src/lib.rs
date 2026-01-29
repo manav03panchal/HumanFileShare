@@ -1,4 +1,5 @@
 //! HumanFileShare - Cross-platform file sharing made simple
+#![recursion_limit = "2048"]
 //!
 //! A minimalist, elegant file sharing application that abstracts away
 //! all complexity from the user.
