@@ -524,6 +524,7 @@ impl Endpoint {
         let endpoint = IrohEndpoint::builder()
             .secret_key(secret_key)
             .alpns(vec![ALPN.to_vec()])
+            .discovery_n0()
             .discovery_local_network()
             .bind()
             .await
